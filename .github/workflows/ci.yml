@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
 name: CI
-  on:
-    workflow_dispatch:
-    
+on:
+  workflow_dispatch:
+  
 jobs:
   lint:
     runs-on: ubuntu-latest-8-cores
