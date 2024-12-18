@@ -132,8 +132,7 @@ jobs:
       env:
         NODE_ENV: production
 
-    - name: Upload artifacts on failure
-      if: failure()
+    - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         path: artifacts
@@ -217,8 +216,7 @@ jobs:
       env:
         SIGNAL_ENV: production
 
-    - name: Upload artifacts on failure
-      if: failure()
+    - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         path: artifacts

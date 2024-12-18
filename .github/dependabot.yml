@@ -7,6 +7,6 @@ updates:
   directories:
     - "/"
   schedule:
-    interval: daily
+    interval: yearly
   allow:
     - dependency-name: electron

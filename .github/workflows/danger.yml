@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 
 name: Danger
-
+on:
+    workflow_dispatch:
+    
 jobs:
   danger:
     runs-on: ubuntu-latest
