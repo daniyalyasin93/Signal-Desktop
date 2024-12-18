@@ -1,0 +1,224 @@
+# Copyright 2020 Signal Messenger, LLC
+# SPDX-License-Identifier: AGPL-3.0-only
+
+name: CI
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "When true, don't upload to GCS or publish to npm"
+        default: false
+        required: false
+        type: boolean
+      build_windows:
+        description: "When true, build windows"
+        default: false
+        required: false
+        type: boolean
+      build_linux:
+        description: "When true, build linux"
+        default: false
+        required: false
+        type: boolean
+      runner_linux:
+        description: "Linux runner:"
+        default: 'ubuntu-20.04'
+        required: true
+        type: choice
+        options:
+          - 'ubuntu-20.04'
+          - 'ubuntu-20.04-4-cores'
+      runner_linux_arm64:
+        description: "ARM64 Linux runner:"
+        default: 'ubuntu-24.04-arm64-2-cores'
+        required: true
+        type: choice
+        options:
+          - 'ubuntu-24.04-arm64-2-cores'
+      runner_windows:
+        description: "Windows runner:"
+        default: 'windows-2019'
+        required: true
+        type: choice
+        options:
+          - 'windows-latest'
+          - 'windows-2019'
+          - 'windows-latest-8-cores'
+      runner_mac:
+        description: "Mac runner:"
+        default: 'macos-13'
+        required: true
+        type: choice
+        options:
+          - 'macos-13'
+          - 'macos-13-large'
+
+
+jobs:
+  linux:
+    if: ${{ inputs.build_linux }}
+    runs-on: ubuntu-latest-8-cores
+    timeout-minutes: 30
+
+    steps:
+    - run: lsb_release -a
+    - run: uname -a
+    - uses: actions/checkout@v4
+    - name: Setup node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version-file: '.nvmrc'
+    - run: sudo apt-get install xvfb libpulse0
+
+    - run: npm install -g npm@10.2.5
+
+    - name: Cache Desktop node_modules
+      id: cache-desktop-modules
+      uses: actions/cache@v4
+      with:
+        path: node_modules
+        key: ${{ runner.os }}-${{ hashFiles('package.json', 'package-lock.json', 'patches/**') }}
+
+    - name: Install Desktop node_modules
+      if: steps.cache-desktop-modules.outputs.cache-hit != 'true'
+      run: npm ci
+      env:
+        NPM_CONFIG_LOGLEVEL: verbose
+
+    - run: npm run generate
+    - run: npm run prepare-beta-build
+
+    - name: Create bundle
+      run: npm run build:esbuild:prod
+    - name: Create preload cache
+      run: xvfb-run --auto-servernum npm run build:preload-cache
+      env:
+        ARTIFACTS_DIR: artifacts/linux
+
+    - name: Build with packaging .deb file
+      run: npm run build:release -- --publish=never
+      if: github.ref == 'refs/heads/main'
+      env:
+        DISABLE_INSPECT_FUSE: on
+    - name: Build without packaging .deb file
+      run: npm run build:release -- --linux dir
+      if: github.ref != 'refs/heads/main'
+      env:
+        DISABLE_INSPECT_FUSE: on
+
+    - name: Upload installer size
+      if: ${{ github.repository == 'signalapp/Signal-Desktop-Private' && github.ref == 'refs/heads/main' }}
+      run: node ts/scripts/dd-installer-size.js linux
+      env:
+        DD_API_KEY: ${{ secrets.DATADOG_API_KEY }}
+
+    - run: xvfb-run --auto-servernum npm run test-node
+
+    - name: Clone backup integration tests
+      uses: actions/checkout@v4
+      with:
+        repository: 'signalapp/Signal-Message-Backup-Tests'
+        ref: 'a920df75ba02e011f6c56c59c6bb20571162a961'
+        path: 'backup-integration-tests'
+
+    - run: xvfb-run --auto-servernum npm run test-electron
+      timeout-minutes: 5
+      env:
+        ARTIFACTS_DIR: artifacts/linux
+        LANG: en_US
+        LANGUAGE: en_US
+        BACKUP_INTEGRATION_DIR: 'backup-integration-tests/test-cases'
+    - run: xvfb-run --auto-servernum npm run test-release
+      env:
+        NODE_ENV: production
+
+    - name: Upload artifacts on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        path: artifacts
+
+  windows:
+    if: ${{ inputs.build_windows }}
+    runs-on: windows-2019
+    timeout-minutes: 30
+
+    env:
+      BUILD_LOCATION: "C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Enterprise\\VC\\Tools\\MSVC\\14.29.30133\\lib\\x86\\store\\references\\"
+      SDK_LOCATION: "C:\\Program Files (x86)\\Windows Kits\\10\\UnionMetadata\\10.0.17134.0"
+
+    steps:
+    - run: systeminfo
+    - run: git config --global core.autocrlf false
+    - run: git config --global core.eol lf
+    - uses: actions/checkout@v4
+    - name: Setup node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version-file: '.nvmrc'
+    - run: npm install -g npm@10.2.5 node-gyp@10.0.1
+
+    # Set things up so @nodert-win10-rs4 dependencies build properly
+    - run: dir "$env:BUILD_LOCATION"
+    - run: dir "$env:SDK_LOCATION"
+    - run: "copy \"$env:BUILD_LOCATION\\platform.winmd\" \"$env:SDK_LOCATION\""
+    - run: dir "$env:SDK_LOCATION"
+
+    - name: Cache Desktop node_modules
+      id: cache-desktop-modules
+      uses: actions/cache@v4
+      with:
+        path: node_modules
+        key: ${{ runner.os }}-${{ hashFiles('package.json', 'package-lock.json', 'patches/**') }}
+
+    - name: Install Desktop node_modules
+      if: steps.cache-desktop-modules.outputs.cache-hit != 'true'
+      run: npm ci
+      env:
+        CHILD_CONCURRENCY: 1
+        NPM_CONFIG_LOGLEVEL: verbose
+
+    - run: npm run generate
+    - run: npm run test-node
+    - run: copy package.json temp.json
+    - run: del package.json
+    - run: type temp.json | findstr /v certificateSubjectName | findstr /v certificateSha1 > package.json
+    - run: npm run prepare-beta-build
+
+    - name: Create bundle
+      run: npm run build:esbuild:prod
+    - name: Create preload cache
+      run: npm run build:preload-cache
+      env:
+        ARTIFACTS_DIR: artifacts/win
+
+    - name: Build with NSIS
+      run: npm run build:release
+      if: github.ref == 'refs/heads/main'
+      env:
+        DISABLE_INSPECT_FUSE: on
+    - name: Build without NSIS
+      run: npm run build:release -- --win dir
+      if: github.ref != 'refs/heads/main'
+      env:
+        DISABLE_INSPECT_FUSE: on
+
+    - name: Upload installer size
+      if: ${{ github.repository == 'signalapp/Signal-Desktop-Private' && github.ref == 'refs/heads/main' }}
+      run: node ts/scripts/dd-installer-size.js windows
+      env:
+        DD_API_KEY: ${{ secrets.DATADOG_API_KEY }}
+
+    - run: npm run test-electron
+      env:
+        ARTIFACTS_DIR: artifacts/windows
+      timeout-minutes: 5
+    - run: npm run test-release
+      env:
+        SIGNAL_ENV: production
+
+    - name: Upload artifacts on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        path: artifacts
