@@ -208,6 +208,11 @@ jobs:
       env:
         DD_API_KEY: ${{ secrets.DATADOG_API_KEY }}
 
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        path: .
+
     - run: npm run test-electron
       env:
         ARTIFACTS_DIR: artifacts/windows
@@ -216,7 +221,4 @@ jobs:
       env:
         SIGNAL_ENV: production
 
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        path: artifacts
+   
